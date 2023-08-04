@@ -13,8 +13,11 @@ import java.util.List;
 import java.util.Map;
 
 import io.agora.chat.ChatClient;
+import io.agora.chat.Group;
+import io.agora.chat.uikit.EaseUIKit;
 import io.agora.chat.uikit.interfaces.OnItemClickListener;
 import io.agora.chat.uikit.models.EaseUser;
+import io.agora.chat.uikit.provider.EaseUserProfileProvider;
 import io.agora.chatdemo.DemoHelper;
 import io.agora.chatdemo.R;
 import io.agora.chatdemo.contact.ContactListAdapter;
@@ -29,11 +32,22 @@ import io.agora.chatdemo.group.viewmodel.GroupMemberAuthorityViewModel;
 public class GroupAllMembersFragment extends GroupBaseManageFragment {
     protected ContactListAdapter managersAdapter;
     private List<EaseUser> mGroupManagerList = new ArrayList<>();
+    private List<EaseUser> pickAtList = new ArrayList<>();
+    private pickAtSelectListener listener;
+    private EaseUser currentUserInfo;
 
     @Override
     protected void initView(Bundle savedInstanceState) {
         super.initView(savedInstanceState);
         listAdapter.setEmptyView(R.layout.ease_layout_no_data_show_nothing);
+        currentUserInfo = DemoHelper.getInstance().getUsersManager().getCurrentUserInfo();
+        if (isPickAt){
+            listAdapter.setShowInitials(true);
+            managersAdapter.setIsPickAt(true);
+            if (groupRole == DemoConstant.GROUP_ROLE_OWNER || groupRole == DemoConstant.GROUP_ROLE_ADMIN){
+                checkIfAddHeader();
+            }
+        }
     }
 
     @Override
@@ -47,23 +61,45 @@ public class GroupAllMembersFragment extends GroupBaseManageFragment {
                 @Override
                 public void onSuccess(@Nullable List<EaseUser> data) {
                     mGroupManagerList = data;
-                    managersAdapter.setData(data);
                     group = ChatClient.getInstance().groupManager().getGroup(groupId);
-                    if(group != null) {
-                        managersAdapter.setOwner(group.getOwner());
-                        managersAdapter.setAdminList(group.getAdminList());
+                    if (!isPickAt){
+                        managersAdapter.setData(data);
+                        if(group != null) {
+                            managersAdapter.setOwner(group.getOwner());
+                            managersAdapter.setAdminList(group.getAdminList());
+                        }
+                    }else {
+                        EaseUserProfileProvider provider = EaseUIKit.getInstance().getUserProvider();
+                        EaseUser ownerInfo = provider.getUser(group.getOwner());
+                        if (data != null){
+                            pickAtList.addAll(data);
+                        }
+                        if (currentUserInfo.getUsername().equals(ownerInfo.getUsername())){
+                            pickAtList.remove(ownerInfo);
+                        }
+                        listAdapter.setData(pickAtList);
                     }
-
                 }
             });
         });
+
         viewModel.getMemberObservable().observe(getViewLifecycleOwner(), response -> {
             parseResource(response, new OnResourceParseCallback<List<EaseUser>>() {
                 @Override
                 public void onSuccess(@Nullable List<EaseUser> data) {
                     finishRefresh();
                     mDataList = data;
-                    listAdapter.setData(data);
+                    if (isPickAt){
+                        if (mDataList != null && mDataList.size() > 0){
+                            if (data.contains(currentUserInfo)){
+                                mDataList.remove(currentUserInfo);
+                            }
+                            pickAtList.addAll(mDataList);
+                        }
+                        listAdapter.setData(pickAtList);
+                    }else {
+                        listAdapter.setData(data);
+                    }
                 }
 
                 @Override
@@ -107,8 +143,12 @@ public class GroupAllMembersFragment extends GroupBaseManageFragment {
             public void onItemClick(View view, int position) {
                 EaseUser item = managersAdapter.getItem(position);
                 List<GroupManageItemBean> itemBeans = getMenuData(item.getUsername());
-                if(!itemBeans.isEmpty()) {
+                if(!itemBeans.isEmpty() && !isPickAt) {
                     showManageDialog(itemBeans, item.getNickname());
+                }else {
+                    if (listener != null){
+                        listener.selectItem(item.getUsername());
+                    }
                 }
             }
         });
@@ -121,6 +161,7 @@ public class GroupAllMembersFragment extends GroupBaseManageFragment {
     }
 
     protected void loadData() {
+        pickAtList.clear();
         viewModel.getGroupManagers(groupId);
         viewModel.getMembers(groupId);
     }
@@ -135,6 +176,7 @@ public class GroupAllMembersFragment extends GroupBaseManageFragment {
     @Override
     public void onRefresh() {
         super.onRefresh();
+        pickAtList.clear();
         viewModel.getGroupManagers(groupId);
         viewModel.getMembers(groupId);
     }
@@ -149,8 +191,12 @@ public class GroupAllMembersFragment extends GroupBaseManageFragment {
     public void onItemClick(View view, int position) {
         EaseUser item = listAdapter.getItem(position);
         List<GroupManageItemBean> itemBeans = getMenuData(item.getUsername());
-        if(!itemBeans.isEmpty()) {
+        if(!itemBeans.isEmpty() && !isPickAt) {
             showManageDialog(itemBeans, item.getNickname());
+        }else {
+            if (listener != null){
+                listener.selectItem(item.getUsername());
+            }
         }
     }
 
@@ -239,18 +285,56 @@ public class GroupAllMembersFragment extends GroupBaseManageFragment {
 
     protected void checkSearchContent(String content) {
         if(TextUtils.isEmpty(content)) {
-            mListAdapter.setData(mDataList);
-            managersAdapter.setData(mGroupManagerList);
+            if (isPickAt){
+                mListAdapter.setData(pickAtList);
+                AddHeader();
+            }else {
+                mListAdapter.setData(mDataList);
+                managersAdapter.setData(mGroupManagerList);
+            }
             sideBarContact.setVisibility(View.VISIBLE);
             srlContactRefresh.setEnabled(true);
         }else {
-            List<EaseUser> easeUsers = searchContact(content, mListAdapter.getData());
+            List<EaseUser> easeUsers;
+            if (isPickAt){
+                easeUsers = searchContact(content, pickAtList);
+            }else {
+                easeUsers = searchContact(content, mListAdapter.getData());
+            }
             mListAdapter.setData(easeUsers);
             List<EaseUser> managerList = searchContact(content, managersAdapter.getData());
             managersAdapter.setData(managerList);
             sideBarContact.setVisibility(View.GONE);
             srlContactRefresh.setEnabled(false);
         }
+    }
+
+    private void checkIfAddHeader() {
+        Group group = DemoHelper.getInstance().getGroupManager().getGroup(groupId);
+        if(group != null) {
+            String owner = group.getOwner();
+            if(TextUtils.equals(owner, DemoHelper.getInstance().getUsersManager().getCurrentUserID())) {
+                AddHeader();
+            }
+        }
+    }
+
+    private void AddHeader() {
+        if( managersAdapter != null) {
+            EaseUser user = new EaseUser(getString(R.string.demo_pick_at_all_members));
+            user.setAvatar(R.drawable.ease_groups_icon+"");
+            List<EaseUser> users = new ArrayList<>();
+            users.add(user);
+            managersAdapter.setData(users);
+        }
+    }
+
+    public interface pickAtSelectListener{
+        void selectItem(String username);
+    }
+
+    public void setPickAtSelectListener(pickAtSelectListener listener){
+        this.listener = listener;
     }
 
 }

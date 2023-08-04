@@ -454,4 +454,7 @@
 
     <string name="ease_action_report">Report</string>
 
+    <string name="demo_pick_at_user_title">\@Mention</string>
+    <string name="demo_pick_at_all_members">ALL</string>
+
 </resources>
